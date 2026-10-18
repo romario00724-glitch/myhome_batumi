@@ -51,7 +51,7 @@ FETCH_DETAILS = True           # догружати картку нового о
 AGENT_THRESHOLD = 3            # від скількох оголошень в одного автора ставити позначку ⚠️
 SKIP_SUSPECTED_AGENTS = False  # True — такі оголошення взагалі не надсилати
 SKIP_SITE_AGENTS = True        # сайт сам позначив автора «Агент» — не надсилати (False — надсилати з ⚠️)
-SKIP_SELF_DECLARED_AGENTS = True  # автор сам пише в описі «я агент» — не надсилати (False — надсилати з ⚠️)
+SKIP_SELF_DECLARED_AGENTS = True  # автор сам називає себе агентом — в описі («я агент») чи в імені («აგენტი», «Агент») — не надсилати (False — надсилати з ⚠️)
 SKIP_NO_REALTORS = ("sale",)   # у цих групах не надсилати, якщо автор пише «с агентствами не сотрудничаю»,
                                # «агентам не звонить» («сотрудничаю 50%» — надсилати); оренда — без фільтра
 MAX_ALERTS_PER_RUN = 25        # запобіжник від спаму; решта прийде наступного запуску
@@ -299,7 +299,7 @@ def is_paid(item):
     return any(item.get(k) for k in ("is_super_vip", "is_vip_plus", "is_vip"))
 
 
-DETAIL_FIELDS = ("user_id", "user_phone_number", "additional_phone_number", "user_title",
+DETAIL_FIELDS = ("user_id", "user_phone_number", "additional_phone_number", "user_title", "owner_name",
                  "floor", "total_floors", "created_at", "create_date", "last_updated", "address")
 
 
@@ -432,6 +432,14 @@ SELF_AGENT = re.compile(  # «я агент», «являюсь агентом»
     r"|\bi(?:\W+am|'m)\W+(?:an?\W+)?(?:real\W+estate\W+)?(?:agent|realtor|broker)\b"
     r"|(?<!არ )\bვარ\W+(?:აგენტი|რიელტორი|მაკლერი|ბროკერი)\b|(?:აგენტი|რიელტორი|მაკლერი|ბროკერი)\W+ვარ\b",
     re.IGNORECASE)
+# Ім'я профілю саме називає автора агентом («აგენტი» — «агент» грузинською, «Agent», «Риелтор»): так
+# підписуються акаунти, яким сайт позначає плашку «Агент» уже після публікації (18.10.2026, див. CLAUDE.md).
+# Слово цілком, тож прізвище «Агентов» чи «Magenta» не спрацьовує; «без агентства», «no agents» відсікає agent_name
+AGENT_NAME = re.compile(
+    r"\b(?:agents?|agency|agencies|realtors?|brokers?)\b"
+    r"|\b(?:агент(?:ы|а|у|ом)?|агентств\w*|(?:риелтор|риэлтор|рієлтор|маклер|брокер)(?:ы|и|а|у|ом)?)\b"
+    r"|\b(?:სა)?აგენტ\w*|\b(?:რიელტორ|მაკლერ|ბროკერ)\w*",
+    re.IGNORECASE)
 
 
 def text_signals(text):
@@ -455,6 +463,20 @@ def text_signals(text):
 def self_declared_agent(item):
     """Автор сам пише в описі, що він агент («я агент», «являюсь агентом», «I am an agent»)."""
     return bool(SELF_AGENT.search(plain_text(item.get("comment")) + " " + str(item.get("_ru_comment") or "")))
+
+
+def agent_name(item):
+    """Ім'я автора в профілі — слово «агент» («აგენტი», «Agent», «Агент», «Риелтор»…): True, якщо так.
+
+    Ім'я у видачі — `user_title`, у картці — `owner_name`. «Без агентства», «no agents», «не агент» — не те,
+    що треба: заперечення шукається так само, як в описі (text_signals)."""
+    for key in ("user_title", "owner_name"):
+        name = clean(item.get(key)).replace("_", " ")  # «Agent_Batumi»: підкреслення розділяє слова
+        for m in AGENT_NAME.finditer(name):
+            before, after = name[max(0, m.start() - 40):m.start()], name[m.end():m.end() + 60]
+            if not (NEGATION_BEFORE.search(before) or NEGATION_AFTER.search(after)):
+                return True
+    return False
 
 
 def phone_fingerprint(digits):
@@ -1036,6 +1058,9 @@ def run_once(state):
             delivered = True
         elif SKIP_SELF_DECLARED_AGENTS and self_declared_agent(item):
             log(f"  пропускаю {item['id']}: автор сам пише в описі, що він агент")
+            delivered = True
+        elif SKIP_SELF_DECLARED_AGENTS and agent_name(item):
+            log(f"  пропускаю {item['id']}: ім'я автора — слово «агент»")
             delivered = True
         elif SKIP_SUSPECTED_AGENTS and suspect >= AGENT_THRESHOLD:
             log(f"  пропускаю {item['id']}: у автора {suspect} оголошень")
