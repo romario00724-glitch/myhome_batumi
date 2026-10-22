@@ -44,14 +44,14 @@ AI_MODEL = "claude-haiku-5-5"  # до 14.10.2026 — OpenAI gpt-5-mini
 
 LANG = "ru"                    # мова назв і посилань з myhome.ge: ru / en / ka
 ONLY_OWNERS = True             # завжди додавати фільтр «Власник» (owner_type=physical)
-REGULAR_PER_RUN = 48           # скільки щонайменше звичайних (не VIP) оголошень переглядати за запуск
-SEED_REGULAR = 120             # скільки звичайних оголошень «запам'ятати» при першому запуску пошуку
-MAX_PAGES_PER_RUN = 40         # запобіжник: більше сторінок одного пошуку за запуск не гортати
+REGULAR_PER_RUN = 24           # скільки щонайменше звичайних (не VIP) оголошень переглядати за запуск
+MAX_PAGES_PER_RUN = 5          # з 21.10.2026 myhome.ge показує гостям лише 5 сторінок видачі (далі — HTTP 500);
+                               # пошук, де платних під 120, ділиться за ціною в searches.txt
 FETCH_DETAILS = True           # догружати картку нового оголошення (телефон, автор)
 AGENT_THRESHOLD = 3            # від скількох оголошень в одного автора ставити позначку ⚠️
 SKIP_SUSPECTED_AGENTS = False  # True — такі оголошення взагалі не надсилати
 SKIP_SITE_AGENTS = True        # сайт сам позначив автора «Агент» — не надсилати (False — надсилати з ⚠️)
-SKIP_SELF_DECLARED_AGENTS = True  # автор сам називає себе агентом — в описі («я агент») чи в імені («აგენტი», «Агент») — не надсилати (False — надсилати з ⚠️)
+SKIP_SELF_DECLARED_AGENTS = True  # автор сам називає себе агентом — в описі («я агент», «мы агентство») чи в імені («აგენტი», «Агент») — не надсилати (False — надсилати з ⚠️)
 SKIP_NO_REALTORS = ("sale",)   # у цих групах не надсилати, якщо автор пише «с агентствами не сотрудничаю»,
                                # «агентам не звонить» («сотрудничаю 50%» — надсилати); оренда — без фільтра
 MAX_ALERTS_PER_RUN = 25        # запобіжник від спаму; решта прийде наступного запуску
@@ -293,8 +293,9 @@ def is_paid(item):
 
     У видачі myhome.ge платні завжди стоять першими — блоками Super VIP → VIP+ → VIP, кожен від
     свіжіших до старших, — і лише за ними звичайні; ні сортування, ні фільтра «без VIP» на сайті
-    немає (перевірено в Тбілісі 15.10.2026). В оренді Батумі платних ~59 (2,5 сторінки), у продажу
-    квартир ~52, будинків 4, комерції 1 (16.10.2026).
+    немає (перевірено в Тбілісі 15.10.2026). В оренді Батумі платних ~58 (2,5 сторінки), у продажу
+    квартир ~66, будинків 6, комерції 4 (22.10.2026; 16.10 — 59, 52, 4, 1). З 21.10.2026 гостям видно
+    лише 5 сторінок (120 оголошень): пошук, де платних під 120, треба ділити за ціною (searches.txt).
     """
     return any(item.get(k) for k in ("is_super_vip", "is_vip_plus", "is_vip"))
 
@@ -424,13 +425,27 @@ NEGATION_AFTER = re.compile(
     r"|(?:არ|ნუ)\W|გარეშე)",
     re.IGNORECASE)
 JOINED = re.compile(r"^\W*(?:и|і|й|та|или|або|and|or)?\W*$", re.IGNORECASE)  # «с агентствами и риелторами»
-# Автор прямо називає себе агентом — це вже не підозра, а факт (SKIP_SELF_DECLARED_AGENTS)
-SELF_AGENT_WORD = r"(?:агент(?:ом)?|агентство|риелтор(?:ом)?|риэлтор(?:ом)?|рієлтор(?:ом)?|маклер(?:ом)?|брокер(?:ом)?)\b"
-SELF_AGENT = re.compile(  # «я агент», «являюсь агентом»; але не «я агентствам не сдаю», «я не агент»
-    r"\bя\W+(?:являюсь\W+|-\W*)?" + SELF_AGENT_WORD +
-    r"|\bявляюсь\W+" + SELF_AGENT_WORD +
+# Автор прямо називає себе агентом — це вже не підозра, а факт (SKIP_SELF_DECLARED_AGENTS).
+# Після «я» / «мы» — називний відмінок, після «являюсь» / «являемся» — орудний: інакше
+# «я агентом не являюсь» і «мы агентами не являемся» теж виглядали б як зізнання.
+SELF_AGENT_WORD = r"(?:агент|агентство|риелтор|риэлтор|рієлтор|маклер|брокер)\b"
+SELF_AGENT_WORD_INS = r"(?:агентом|агентством|риелтором|риэлтором|рієлтором|маклером|брокером)\b"
+SELF_AGENTS_WORD = (r"(?:агентство|агенты|риелторы|риэлторы|маклеры|брокеры"
+                    r"|агенція|агенти|рієлтори|маклери|брокери)\b")
+SELF_AGENTS_WORD_INS = r"(?:агентством|агентами|риелторами|риэлторами|маклерами|брокерами)\b"
+SELF_AGENT = re.compile(  # «я агент», «мы агентство»; але не «я агентствам не сдаю», «не являюсь агентом»
+    r"\bя\W+(?:-\W*)?" + SELF_AGENT_WORD +
+    r"|(?<!не )\bявляюсь\W+" + SELF_AGENT_WORD_INS +
+    r"|\b(?:мы|ми)\W+(?:-\W*)?" + SELF_AGENTS_WORD +                              # «Мы агентство», «мы — риелторы»
+    r"|(?<!не )\bявляемся\W+" + SELF_AGENTS_WORD_INS +
+    r"|\b(?:наше|наша)\W+(?:агентство|агенція)\b"
     r"|\bi(?:\W+am|'m)\W+(?:an?\W+)?(?:real\W+estate\W+)?(?:agent|realtor|broker)\b"
-    r"|(?<!არ )\bვარ\W+(?:აგენტი|რიელტორი|მაკლერი|ბროკერი)\b|(?:აგენტი|რიელტორი|მაკლერი|ბროკერი)\W+ვარ\b",
+    r"|\bwe(?:\W+are|'re)\W+(?:an?\W+)?(?:real\W+estate\W+)?(?:agency|agents|realtors|brokers)\b"
+    r"|\bour\W+(?:real\W+estate\W+)?agency\b"
+    r"|(?<!არ )\bვარ\W+(?:აგენტი|რიელტორი|მაკლერი|ბროკერი)\b|(?:აგენტი|რიელტორი|მაკლერი|ბროკერი)\W+ვარ\b"
+    r"|(?<!არ )\bვართ\W+(?:სააგენტო|აგენტები|რიელტორები|მაკლერები|ბროკერები)\b"   # «ჩვენ ვართ სააგენტო»
+    r"|(?:სააგენტო|აგენტები|რიელტორები|მაკლერები|ბროკერები)\W+ვართ\b"
+    r"|\bჩვენი\W+სააგენტო\b",
     re.IGNORECASE)
 # Ім'я профілю саме називає автора агентом («აგენტი» — «агент» грузинською, «Agent», «Риелтор»): так
 # підписуються акаунти, яким сайт позначає плашку «Агент» уже після публікації (18.10.2026, див. CLAUDE.md).
@@ -461,7 +476,7 @@ def text_signals(text):
 
 
 def self_declared_agent(item):
-    """Автор сам пише в описі, що він агент («я агент», «являюсь агентом», «I am an agent»)."""
+    """Автор сам пише в описі, що він агент («я агент», «мы агентство», «I am an agent»)."""
     return bool(SELF_AGENT.search(plain_text(item.get("comment")) + " " + str(item.get("_ru_comment") or "")))
 
 
@@ -903,7 +918,8 @@ def translate_listing(item):
 # ─────────────────────────────── база (state.json) ───────────────────────────────
 
 def new_state():
-    # regular_seeded — пошуки, які вже гортають повз платні оголошення (див. run_once)
+    # regular_seeded — пошуки, які вже гортають повз платні оголошення (див. run_once);
+    # announced — назви, для яких уже було «✅ Слежу…» (run_once додає його сам)
     return {"version": 1, "searches": {}, "seen": {}, "authors": {}, "fail_streak": 0, "regular_seeded": []}
 
 
@@ -958,6 +974,12 @@ def run_once(state):
     day = today()
     seen = seen_ids(state)
     candidates, batch, any_ok = [], set(), False
+    # «✅ Слежу…» — один раз на назву пошуку: поділені за ціною пошуки мають спільну назву. База до 22.10.2026
+    # цього не пам'ятала, а повідомлення для всіх нинішніх назв уже приходили.
+    if "announced" not in state:
+        state["announced"] = sorted({label for label, _, _ in searches}) if state["searches"] else []
+    announce = {}  # назва → [група, скільки запам'ятав]
+    labels = [label for label, _, _ in searches]
 
     for label, url, group in searches:
         if group and telegram_ready() and not telegram_ready(group):
@@ -969,23 +991,26 @@ def run_once(state):
         except ConfigError as e:
             log(f"[{label}] {e}")
             continue
+        name = label  # для журналу: пошуки з однаковою назвою розрізняє діапазон ціни
+        if labels.count(label) > 1:
+            prices = dict(params)
+            name = f"{label}, ціна {prices.get('price_from', '0')}–{prices.get('price_to', '…')}"
         key = urllib.parse.urlencode(sorted(params), safe=",")
         seeding = key not in state["searches"]
         # Пошук, засіяний до 15.10.2026, коли бот ще не гортав повз платні: звичайні оголошення, яких
         # він тоді не бачив, один раз тихо запам'ятовуємо — інакше прийшли б у групу пачкою.
         catching_up = not seeding and key not in state["regular_seeded"]
         quiet = seeding or catching_up
-        need = SEED_REGULAR if quiet else REGULAR_PER_RUN
 
-        # Гортаємо, доки не пройдемо всі платні (is_paid) і не переглянемо щонайменше need звичайних;
-        # у звичайному запуску — ще й доти, доки на сторінці трапляються незнайомі звичайні (бот пропустив
-        # кілька запусків). MAX_PAGES_PER_RUN — запобіжник.
+        # Гортаємо, доки не пройдемо всі платні (is_paid) і не переглянемо щонайменше REGULAR_PER_RUN
+        # звичайних, і далі — доки на сторінці трапляються незнайомі звичайні (бот пропустив кілька запусків).
+        # Тихий запуск запам'ятовує все, що сайт показує. Далі 5-ї сторінки myhome.ge гостей не пускає.
         found, ok, failed, regular = [], False, False, 0
         for page in range(1, MAX_PAGES_PER_RUN + 1):
             try:
                 items = fetch_page(params, page)
             except FetchError as e:
-                log(f"[{label}] сторінка {page}: {e}")
+                log(f"[{name}] сторінка {page}: {e}")
                 failed = True
                 break
             ok = True
@@ -994,12 +1019,13 @@ def run_once(state):
             found.extend(items)
             fresh = [it for it in items if not is_paid(it)]
             regular += len(fresh)
-            if regular >= need and (quiet or all(int(it["id"]) in seen for it in fresh)):
+            if not quiet and regular >= REGULAR_PER_RUN and all(int(it["id"]) in seen for it in fresh):
                 break
             time.sleep(random.uniform(1.0, 2.0))
         else:
-            log(f"[{label}] {MAX_PAGES_PER_RUN} сторінок, а звичайних оголошень лише {regular} — "
-                "платних стало забагато?")
+            if regular < REGULAR_PER_RUN:
+                log(f"[{name}] на {MAX_PAGES_PER_RUN} сторінках лише {regular} звичайних оголошень, решта — "
+                    "платні, а далі сайт не показує: поділіть цей пошук за ціною дрібніше (searches.txt)")
         if not ok:
             continue
         any_ok = True
@@ -1014,19 +1040,17 @@ def run_once(state):
                     register_author(state, item, day)
                     added += not is_paid(item)
             if failed:  # не дочитали — наступного запуску ще раз тихо, інакше решта прийде пачкою
-                log(f"[{label}] не дочитав видачу: тихо запам'ятав {added} звичайних, "
+                log(f"[{name}] не дочитав видачу: тихо запам'ятав {added} звичайних, "
                     "решту — наступного запуску")
                 continue
             state["regular_seeded"].append(key)
             if catching_up:
-                log(f"[{label}] гортаю повз платні оголошення: тихо запам'ятав {added} звичайних, "
+                log(f"[{name}] гортаю повз платні оголошення: тихо запам'ятав {added} звичайних, "
                     "яких раніше не бачив")
                 continue
             state["searches"][key] = day
-            log(f"[{label}] перший запуск: запам'ятав {len(found)} оголошень, далі — лише нові")
-            if telegram_ready(group):
-                send_text(f"✅ Слежу за поиском «{html.escape(label)}». Текущие {len(found)} "
-                          "объявлений запомнил — буду присылать только новые.", group)
+            log(f"[{name}] перший запуск: запам'ятав {len(found)} оголошень, далі — лише нові")
+            announce.setdefault(label, [group, 0])[1] += len(found)
             continue
 
         for item in found:
@@ -1034,6 +1058,14 @@ def run_once(state):
             if listing_id not in seen and listing_id not in batch:
                 batch.add(listing_id)
                 candidates.append((label, group, item))
+
+    for label, (group, count) in announce.items():
+        if label in state["announced"]:
+            continue
+        state["announced"].append(label)
+        if telegram_ready(group):
+            send_text(f"✅ Слежу за поиском «{html.escape(label)}». Текущие {count} "
+                      "объявлений запомнил — буду присылать только новые.", group)
 
     update_fail_streak(state, any_ok)
     if not candidates:
@@ -1068,7 +1100,10 @@ def run_once(state):
         else:
             if ANTHROPIC_API_KEY and TRANSLATE_ALERTS and time.time() < translate_deadline:
                 translate_listing(item)
-            if group in SKIP_NO_REALTORS and no_realtors.refuses_realtors(
+            if SKIP_SELF_DECLARED_AGENTS and item.get("_ru_comment") and self_declared_agent(item):
+                log(f"  пропускаю {item['id']}: автор сам пише в описі, що він агент (видно з перекладу)")
+                delivered = True
+            elif group in SKIP_NO_REALTORS and no_realtors.refuses_realtors(
                     plain_text(item.get("comment")) + " " + str(item.get("_ru_comment") or "")):
                 log(f"  пропускаю {item['id']}: автор пише, що не співпрацює з рієлторами")
                 delivered = True
